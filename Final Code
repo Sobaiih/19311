@@ -1,0 +1,269 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include "DHT.h"
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+
+// DHT Sensor
+#define DHTPIN 25 // Pin connected to DHT11
+#define alarmpin 26 // Pin connected to DHT11
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// WiFi settings
+const char* ssid = "Elkolonyyy";
+const char* password = "SOKHMAGH";
+
+// Adafruit IO settings
+#define MQTT_SERV "io.adafruit.com"
+#define MQTT_PORT 1883
+#define MQTT_NAME "Ezra3ly"
+#define MQTT_PASS "**********"
+
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, MQTT_SERV, MQTT_PORT, MQTT_NAME, MQTT_PASS);
+
+// Define Adafruit IO feeds
+Adafruit_MQTT_Publish moistureFeed = Adafruit_MQTT_Publish(&mqtt, MQTT_NAME "/f/Soil Moisture");
+Adafruit_MQTT_Publish temperatureFeed = Adafruit_MQTT_Publish(&mqtt, MQTT_NAME "/f/Temperature");
+Adafruit_MQTT_Publish humidityFeed = Adafruit_MQTT_Publish(&mqtt, MQTT_NAME "/f/Humidity");
+Adafruit_MQTT_Publish leafHealthFeed = Adafruit_MQTT_Publish(&mqtt, MQTT_NAME "/f/Leaf Health");
+
+// Google Apps Script Web App URL
+const char* serverName = "https://script.google.com/macros/s/AKfycbzGpifLGfpzu5cXFb_4IPvt4Kih8Sg9iKJdJbdozjCEmgQ0MBSo-FXvX7xg24YG11scag/exec";
+
+// Initialize NTP client
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 7200, 60000); // Update every 60 seconds
+
+// Soil Moisture Pin (analog pin)
+const int moisturePin = 34;  // Change to analog pin
+
+// Color Sensor Pins
+#define outPin 12
+#define s0 33
+#define s1 32
+#define s2 27
+#define s3 14
+
+// Variables for color sensor
+int red, grn, blu;
+String color = "";
+long startTiming = 0;
+long elapsedTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode (alarmpin, OUTPUT);
+  // WiFi connection
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+
+  // Start DHT sensor
+  dht.begin();
+
+  // Initialize NTP client
+  timeClient.begin();
+
+  // Initialize soil moisture sensor
+  pinMode(moisturePin, INPUT);
+
+  // Initialize color sensor
+  pinMode(s0, OUTPUT);
+  pinMode(s1, OUTPUT);
+  pinMode(s2, OUTPUT);
+  pinMode(s3, OUTPUT);
+  pinMode(outPin, INPUT); // out from sensor becomes input to Arduino
+ 
+  // Setting frequency scaling to 100%
+  digitalWrite(s0, HIGH);
+  digitalWrite(s1, HIGH);
+
+  Serial.println("Welcome to Yellow-Green Detector");
+  startTiming = millis();
+}
+
+void loop() {
+  MQTT_connect();
+
+  // Read soil moisture as percentage
+  float moisturePercentage = readSoilMoisture();
+  Serial.print("Soil Moisture: ");
+  Serial.print(moisturePercentage);
+  Serial.println(" %");
+
+  // Read temperature and humidity
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+  Serial.print("Temperature: ");
+  Serial.print(t);
+  Serial.println(" °C");
+  Serial.print("Humidity: ");
+  Serial.print(h);
+  Serial.println(" %");
+
+  // Detect color and determine leaf health
+  getColor(); // Updates global variable `color`
+  String leafHealth;
+  if (color == "GREEN") {
+    leafHealth = "Healthy";
+    digitalWrite(alarmpin, LOW);
+  } else if (color == "YELLOW") {
+    leafHealth = "Warning";
+    digitalWrite(alarmpin, LOW);
+  } else {
+    leafHealth = "Unhealthy";
+    digitalWrite(alarmpin, HIGH);
+  }
+  Serial.print("Leaf Health: ");
+  Serial.println(leafHealth);
+
+  // Print RGB values to Serial Monitor
+  Serial.print("Red: ");
+  Serial.print(red);
+  Serial.print(" | Green: ");
+  Serial.print(grn);
+  Serial.print(" | Blue: ");
+  Serial.println(blu);
+
+  // Publish data to Adafruit IO
+  bool success = true;
+  success &= moistureFeed.publish(moisturePercentage);  // Now sending percentage value
+  success &= temperatureFeed.publish(t);
+  success &= humidityFeed.publish(h);
+  success &= leafHealthFeed.publish(leafHealth.c_str());
+
+  // Send data to Google Sheets
+  if (success) {
+    sendDataToGoogleSheets(moisturePercentage, t, h, leafHealth);
+  } else {
+    Serial.println("Failed to publish data to Adafruit IO");
+  }
+
+  delay(6000); // Wait before the next reading
+}
+
+float readSoilMoisture() {
+  // Read analog value from the moisture sensor
+  int sensorValue = analogRead(moisturePin);  // Read value from the analog pin
+  float moisturePercentage = (float(sensorValue) / 4095) * 100; // Convert to percentage
+  return moisturePercentage;  // Return percentage
+  if (moisturePercentage < 30){
+    digitalWrite(alarmpin, HIGH);   
+  }else{
+    digitalWrite(alarmpin, LOW);
+  }
+}
+
+/* Read RGB components */
+void readRGB() {
+  red = 0, grn = 0, blu = 0;
+ 
+  int n = 10;
+  for (int i = 0; i < n; ++i) {
+    // Read red component
+    digitalWrite(s2, LOW);
+    digitalWrite(s3, LOW);
+    red = red + pulseIn(outPin, LOW);
+ 
+    // Read green component
+    digitalWrite(s2, HIGH);
+    digitalWrite(s3, HIGH);
+    grn = grn + pulseIn(outPin, LOW);
+   
+    // Read blue component
+    digitalWrite(s2, LOW);
+    digitalWrite(s3, HIGH);
+    blu = blu + pulseIn(outPin, LOW);
+  }
+  red = red / n;
+  grn = grn / n;
+  blu = blu / n;
+}
+
+/* Determine color based on RGB values */
+void getColor() {  
+  readRGB();  // Reading RGB values from the sensor
+
+  // Thresholds for Yellow Detection
+  if (red > 90 && red <= 105 && grn > 90 && grn <= 110 && blu >= 70 && blu <= 85) {
+    color = "YELLOW";
+  }
+  // Thresholds for Green Detection
+  else if (grn >= 15 && grn <= 60  && blu >= 10 && blu <= 35 ) {
+    color = "GREEN";
+  }
+  // Thresholds for No Color Detected (Ambient or invalid)
+  else if (red >= 90 && red <= 120 && grn >= 90 && grn <= 120 && blu >= 70 && blu <= 90) {
+    color = "NO_COLOR";
+  }
+  // Fallback for ambiguous colors
+  else {
+    color = "NO_COLOR";
+  }
+
+  Serial.print("Color detected: ");
+  Serial.println(color);
+  delay(1000);
+}
+
+void MQTT_connect() {
+  int8_t ret;
+
+  if (mqtt.connected()) {
+    return;
+  }
+
+  uint8_t retries = 3;
+  while ((ret = mqtt.connect()) != 0) {
+    mqtt.disconnect();
+    delay(5000);
+    retries--;
+    if (retries == 0) {
+      while (1);
+    }
+  }
+}
+
+void sendDataToGoogleSheets(float moisture, float temperature, float humidity, String leafHealth) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(serverName);
+    http.addHeader("Content-Type", "application/json");
+
+    timeClient.update();
+    String formattedTime = timeClient.getFormattedTime();
+
+    String jsonData = "{\"method\":\"append\", \"temperature\":" + String(temperature) +
+                      ", \"humidity\":" + String(humidity) +
+                      ", \"moisture\":" + String(moisture) +  // Now sending percentage value
+                      ", \"leafHealth\":\"" + leafHealth + "\"" +
+                      ", \"timestamp\":\"" + formattedTime + "\"}";
+
+    Serial.print("JSON payload: ");
+    Serial.println(jsonData);
+
+    int httpResponseCode = http.POST(jsonData);
+
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+      Serial.print("Response: ");
+      Serial.println(response);
+    } else {
+      Serial.print("Error on sending POST: ");
+      Serial.println(httpResponseCode);
+    }
+
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+}
