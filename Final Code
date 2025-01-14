@@ -8,19 +8,19 @@
 
 // DHT Sensor
 #define DHTPIN 25 // Pin connected to DHT11
-#define alarmpin 26 // Pin connected to DHT11
+#define alarmpin 26 // Pin connected to the buzzer
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
 // WiFi settings
-const char* ssid = "Elkolonyyy";
+const char* ssid = "El-Nasayebb";
 const char* password = "SOKHMAGH";
 
 // Adafruit IO settings
 #define MQTT_SERV "io.adafruit.com"
 #define MQTT_PORT 1883
 #define MQTT_NAME "Ezra3ly"
-#define MQTT_PASS "**********"
+#define MQTT_PASS "************"
 
 WiFiClient client;
 Adafruit_MQTT_Client mqtt(&client, MQTT_SERV, MQTT_PORT, MQTT_NAME, MQTT_PASS);
@@ -45,18 +45,18 @@ const int moisturePin = 34;  // Change to analog pin
 #define outPin 12
 #define s0 33
 #define s1 32
-#define s2 27
-#define s3 14
+#define s2 14
+#define s3 27
 
 // Variables for color sensor
 int red, grn, blu;
 String color = "";
 long startTiming = 0;
-long elapsedTime = 0;
 
 void setup() {
   Serial.begin(115200);
-  pinMode (alarmpin, OUTPUT);
+  pinMode(alarmpin, OUTPUT);
+
   // WiFi connection
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -113,14 +113,19 @@ void loop() {
   String leafHealth;
   if (color == "GREEN") {
     leafHealth = "Healthy";
-    digitalWrite(alarmpin, LOW);
   } else if (color == "YELLOW") {
     leafHealth = "Warning";
-    digitalWrite(alarmpin, LOW);
   } else {
     leafHealth = "Unhealthy";
-    digitalWrite(alarmpin, HIGH);
   }
+
+  // Combined logic for buzzer
+  if (moisturePercentage < 30 || color == "NO_COLOR" || color == "Unhealthy") {
+    digitalWrite(alarmpin, HIGH);  // Activate buzzer for warning conditions
+  } else {
+    digitalWrite(alarmpin, LOW);   // Deactivate buzzer otherwise
+  }
+
   Serial.print("Leaf Health: ");
   Serial.println(leafHealth);
 
@@ -152,16 +157,10 @@ void loop() {
 float readSoilMoisture() {
   // Read analog value from the moisture sensor
   int sensorValue = analogRead(moisturePin);  // Read value from the analog pin
-  float moisturePercentage = (float(sensorValue) / 4095) * 100; // Convert to percentage
+  float moisturePercentage = (1 - (float(sensorValue) / 4095)) * 100; // Convert to percentage
   return moisturePercentage;  // Return percentage
-  if (moisturePercentage < 30){
-    digitalWrite(alarmpin, HIGH);   
-  }else{
-    digitalWrite(alarmpin, LOW);
-  }
 }
 
-/* Read RGB components */
 void readRGB() {
   red = 0, grn = 0, blu = 0;
  
@@ -187,16 +186,15 @@ void readRGB() {
   blu = blu / n;
 }
 
-/* Determine color based on RGB values */
 void getColor() {  
   readRGB();  // Reading RGB values from the sensor
 
   // Thresholds for Yellow Detection
-  if (red > 90 && red <= 105 && grn > 90 && grn <= 110 && blu >= 70 && blu <= 85) {
+  if (red > 90 && red <= 105 && grn > 90 && grn <= 110 && blu >= 70 && blu <= 40) {
     color = "YELLOW";
   }
   // Thresholds for Green Detection
-  else if (grn >= 15 && grn <= 60  && blu >= 10 && blu <= 35 ) {
+  else if (grn >= 15 && grn <= 60  && blu >= 20 && blu <= 50 ) {
     color = "GREEN";
   }
   // Thresholds for No Color Detected (Ambient or invalid)
